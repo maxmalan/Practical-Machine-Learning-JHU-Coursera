@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Coursera Project"
+author: "Massimo Malandra"
+date: "8 de abril de 2018"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+### Overview:
+
+This document contains and illustrates the analysis conducted for the final project of the *Practical Machine Learning* course offered by the Johns Hopkins University.
+The goal of this work is to build a model who is able to predict the manner in which a certain person has done a certain physical exercise, based on a set of variables that register movements, using a series of special devices, as explained in the next paragraph.
+
+
+### Background:
+
+Using devices such as *Jawbone Up*, *Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement: a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+A special thanks goes to the authors of this document who have been very generous in allowing their data to be used for this kind of assignment.
+
+### Data loading and data cleaning:
+
+For this project, two different sets of data have been provided: a training and a test set, that can be downloaded at the respective url indicated above. The first contains 19622 records, while the second only 20; both have 160 variables.
+
+```{r}
+urlTrain <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+urlTest <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+trainingData <- read.csv(url(urlTrain), na.strings = c('','NA'))
+testData <- read.csv(url(urlTest), na.strings = c('','NA'))
+```
+
+```{r eval = FALSE}
+head(trainingData)
+str(trainingData)  #19622 obs. of  160 variables
+
+head(testData)
+str(testData)  #20 obs. of  160 variables
+```
+
+Both the training and test files come with numerous NA values (we have already read the file in such a way that blanks are read as NA too): doing a quick check we see that 100 variables in both files have almost 98% of NAs, hence we will remove them from the analysis.
+Moreover, having a quick look at the structure of the datasets, it is easy to see how the first 7 variables are not related in any way to body movements (for example: raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, etc.). We will remove these variables too, because they are not going to do anything else than adding noise to the model, not bringing any added value to the prediction of the manner in which the movement has been done.
+
+```{r}
+# Checking and removing NA in both train and test
+naCountTrain <- sapply(trainingData, function(x) sum(is.na(x)))
+table(naCountTrain)
+trainingData <- trainingData[ , naCountTrain == 0]
+
+naCountTest <- sapply(testData, function(x) sum(is.na(x)))
+table(naCountTest)
+testData <- testData[ , naCountTest == 0]
+```
+
+```{r eval = FALSE}
+str(trainingData)
+# 19622 obs. of  60 variables
+
+str(testData)
+# 20 obs. of  60 variables
+```
+
+```{r}
+# Removing the first 7 variables who don't bring any added value to the purpose of the analysis:
+trainingData <- trainingData[ , 8:60]
+testData <- testData[ , 8:60]
+```
+
+```{r eval = FALSE}
+dim(trainingData) # 19622 obs., 53 var.
+dim(testData)  # 20 obs., 53 var.
+
+colnames(trainingData) == colnames(testData) # all TRUE except the last one: OK
+```
+
+### Data partition:
+
+Put aside the test set - who will be used only once the final model will be built and selected -, let's focus now on partitioning the training dataset in 2 different subsets: train (70%) and test (30%) sets again, based on the *classe* variable, who is the target variable of our analysis. The train set consists now of 13737 observations and 53 variables.
+
+```{r message=FALSE}
+# Partitioning the training set:
+library(caret)
+inTrain <- createDataPartition(trainingData$classe, p=0.7, 
+                               list=FALSE)
+trainSet <- trainingData[inTrain, ]
+testSet <- trainingData[-inTrain, ]
+```
+
+```{r eval = FALSE}
+dim(trainSet)  #  13737 obs., 53 var.
+dim(testSet)  #  5885 obs., 53 var.
+```
+
+### Prediction models:
+
+Considering the type and the nature of the analytical problem we are facing and the corresponding dataset we have at our disposal, we can try to fit two different machine learning algorithms and evalutate both of them, before deciding which one to select and apply to the test set, we have put aside to actually put our model in action.
+
+#### Decision Tree:
+
+First of all, we will fit a *decision tree* model. The seed will be set at 12345 for reproducibility purposes. 
+
+```{r message = FALSE}
+# Decision Tree model:
+library(caret)
+library(rpart)
+set.seed(12345)
+
+decTreeModel <- rpart(classe ~ ., data = trainSet, method = "class")
+
+predDecTree <- predict(decTreeModel, newdata = testSet, 
+                       type = "class")
+confDecTree <- confusionMatrix(predDecTree, testSet$classe)
+confDecTree
+```
+
+The figure below describes the trees with all of its nodes and splits.
+
+```{r}
+library(RColorBrewer)
+library(rattle)
+fancyRpartPlot(decTreeModel)
+
+```
+
+
+#### Random Forest:
+
+As second option, we will try to fit a *random forest* model, with the default parameter of 500 as number of trees to grow. 
+In order to avoid that our model would adjust too much to the twirks of our train set - and hence pick the random noise that it carries - we will use a *K-fold cross validation*, with 3 folds. This means that we will use 3 different pairs of train and test, calculating the corresponding errors. The average of these 3 errors will then represent a better estimate of the error we would get in an *out of sample* procedure. 
+
+
+```{r message = FALSE}
+# Random Forest model:
+library(randomForest)
+set.seed(12345)
+
+controlRf = trainControl(method = "cv", number = 3, verboseIter = FALSE)
+randForestModel <- randomForest(classe ~ ., data = trainSet,
+                                trControl = controlRf)
+
+predRandForest <- predict(randForestModel, testSet,
+                          type = "class")
+confusionMatrix(predRandForest, testSet$classe)
+```
+
+
+Looking at the accuracy of the two models presented, we can see how the _Random Forest_ is the one that allows to reach a higher figure (0.7315 decision tree vs. 0.9962 random forest), hence it is the model that will be selected to be used to predict the type of movement of the 20 observations included in the test data.
+
+### Scoring predictions:
+
+The selected model is now used on the test data, in order to predict the 20 manners in which the movement has been done, indicated with letters from A to E.
+
+```{r}
+# Random Forest prediction:
+randForPred <- predict(randForestModel, testData, type = "class")
+randForPred
+```
+
